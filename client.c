@@ -15,38 +15,48 @@
 
 #define BUFFER_LEN 1024
 
+#define RED   "\x1B[31m"
+#define GREEN   "\x1B[32m"
+#define YELLOW   "\x1B[33m"
+#define BLUE   "\x1B[34m"
+#define MAGENT   "\x1B[35m"
+#define CYAN   "\x1B[36m"
+#define WHITE   "\x1B[37m"
+#define RESET "\x1B[0m"
+
 
 int client;
 int sock;
-
+struct sctp_sndrcvinfo sndrcvinfo;
+int flags;
 
 void * downlink_thread()
 {
     char buffer[BUFFER_LEN];
     int len;
-    printf("Downlink Thread: Started correctly\n");
-    /* Forward all data from the SCTP server to the TCP client */
+    printf("%sDownlink Thread: Started correctly%s\n", BLUE, RESET);
+    /* Forward all data from the TCP server to the SCTP client */
     while(1)
     {
         bzero(buffer, BUFFER_LEN);
         len = (int)recv(sock, buffer, BUFFER_LEN, 0);
-        printf("Downlink packet forwarded\n");
-        send(client, buffer, len, 0);
+        sctp_sendmsg (client, (void *) buffer, (size_t) len, NULL, 0, 0, 0, 0, 0, 0);
+        printf("%sMSG (TCP Tunnel -> RAN): %d bytes%s\n", BLUE, len, RESET);
     }
 }
 
 void * uplink_thread()
 {
-    printf("Uplink Thread: Started correctly\n");
+    printf("%sUplink Thread: Started correctly%s\n", RED, RESET);
     char buffer[BUFFER_LEN];
     int len;
-    /* Forward all data from the TCP client to the SCTP server */
+    /* Forward all data from the SCTP client to the TCP server */
     while(1)
     {
         bzero(buffer, BUFFER_LEN);
-        len = (int)recv(client, buffer, BUFFER_LEN, 0);
-        printf("Uplink packet forwarded\n");
+        len = sctp_recvmsg(client, buffer, BUFFER_LEN, (struct sockaddr *) NULL, 0, &sndrcvinfo, &flags);
         send(sock, buffer, len, 0);
+        printf("%sMSG (RAN -> TCP Tunnel): %d bytes%s\n", RED, len, RESET);
     }
 }
 
