@@ -19,19 +19,6 @@
 #define GREEN   "\x1B[32m"
 #define RESET "\x1B[0m"
 
-void dump_memory(char * buf, int len)
-{
-    int i;
-    printf("Memory Dump");
-    for(i = 0; i < len; i++)
-    {
-        if(i % 16 == 0)
-            printf("\n");
-        printf("%.2x ", buf[i] & 0xFF);
-    }
-    printf("\n");
-}
-
 
 /* Global decriptors to be accessed from threads */
 int client, sock_sctp, sock;
@@ -68,7 +55,6 @@ void * downlink_thread()
         }
         memcpy(buffer, &sndrcvinfo, struct_size);
         send(client, buffer, len + struct_size, 0);
-        dump_memory(buffer + struct_size, len);
         printf("%s(TCP Tunnel <- EPC): %d bytes%s\n", GREEN, len, RESET);
     }
 }
@@ -97,7 +83,6 @@ void * uplink_thread()
         }
         memcpy(&sndrcvinfo, buffer, struct_size);
         sctp_send(sock_sctp, (void *) buffer + struct_size, (size_t) len - struct_size, &sndrcvinfo, 0);
-        dump_memory(buffer + struct_size, len - struct_size);
         printf("%s(TCP Tunnel -> EPC): %d bytes%s\n", RED, len - struct_size, RESET);
     }
 }
