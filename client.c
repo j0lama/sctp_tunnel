@@ -24,39 +24,72 @@
 #define WHITE   "\x1B[37m"
 #define RESET "\x1B[0m"
 
+/* Global decriptors to be accessed from threads */
+int client, sock_sctp, sock;
+/* Thread descriptors */
+pthread_t downlink_id, uplink_id;
 
-int client;
-int sock;
-struct sctp_sndrcvinfo sndrcvinfo;
-int flags;
+void sigint_handler(int dummy) {
+    pthread_cancel(downlink_id);
+    pthread_cancel(uplink_id);
+}
 
 void * downlink_thread()
 {
-    char buffer[BUFFER_LEN];
+    /* (RAN) <- (TCP Tunnel) */
+    char buffer[BUFFER_LEN + sizeof(struct sctp_sndrcvinfo)];
     int len;
-    printf("%sDownlink Thread: Started correctly%s\n", BLUE, RESET);
+    struct sctp_sndrcvinfo sndrcvinfo;
+    int struct_size = sizeof(sndrcvinfo);
+    printf("%sDownlink Thread: Started correctly%s\n", GREEN, RESET);
+
     /* Forward all data from the TCP server to the SCTP client */
     while(1)
     {
-        bzero(buffer, BUFFER_LEN);
-        len = (int)recv(sock, buffer, BUFFER_LEN, 0);
-        sctp_sendmsg (client, (void *) buffer, (size_t) len, NULL, 0, 0, 0, 0, 0, 0);
-        printf("%sMSG (TCP Tunnel -> RAN): %d bytes%s\n", BLUE, len, RESET);
+        bzero(buffer, BUFFER_LEN + struct_size);
+        /* Addapted to receive in the first struct_size bytes of the buffer a sctp_sndrcvinfo structure and forward it to the SCTP client*/
+        len = (int)recv(sock, buffer, BUFFER_LEN + struct_size, 0);
+        /* If connection is closed */
+        if(len <= 0)
+        {
+            printf("Downlink thread: Connection closed\n");
+            /* Exiting threads */
+            pthread_cancel(uplink_id);
+            pthread_exit(0);
+        }
+        memcpy(&sndrcvinfo, buffer, struct_size);
+        sctp_send(client, (void *) buffer + struct_size, (size_t) len - struct_size, &sndrcvinfo, 0);
+        printf("%s(RAN <- TCP Tunnel): %d bytes%s\n", GREEN, len - struct_size, RESET);
     }
 }
 
 void * uplink_thread()
 {
-    printf("%sUplink Thread: Started correctly%s\n", RED, RESET);
-    char buffer[BUFFER_LEN];
+    /* (RAN) -> (TCP Tunnel) */
+    char buffer[BUFFER_LEN + sizeof(struct sctp_sndrcvinfo)];
     int len;
+    struct sctp_sndrcvinfo sndrcvinfo;
+    int struct_size = sizeof(sndrcvinfo);
+    int flags;
+    printf("%sUplink Thread: Started correctly%s\n", RED, RESET);
+
     /* Forward all data from the SCTP client to the TCP server */
     while(1)
     {
-        bzero(buffer, BUFFER_LEN);
-        len = sctp_recvmsg(client, buffer, BUFFER_LEN, (struct sockaddr *) NULL, 0, &sndrcvinfo, &flags);
-        send(sock, buffer, len, 0);
-        printf("%sMSG (RAN -> TCP Tunnel): %d bytes%s\n", RED, len, RESET);
+        bzero(buffer, BUFFER_LEN + struct_size);
+        /* Addapted to send in the first struct_size bytes of the buffer a sctp_sndrcvinfo structure*/
+        len = sctp_recvmsg(client, buffer + struct_size, BUFFER_LEN, (struct sockaddr *) NULL, 0, &sndrcvinfo, &flags);
+        /* If connection is closed */
+        if(len <= 0)
+        {
+            printf("Uplink thread: Connection closed\n");
+            /* Exiting threads */
+            pthread_cancel(downlink_id);
+            pthread_exit(0);
+        }
+        memcpy(buffer, &sndrcvinfo, struct_size);
+        send(sock, buffer, len + struct_size, 0);
+        printf("%s(RAN -> TCP Tunnel): %d bytes%s\n", RED, len, RESET);
     }
 }
 
@@ -64,10 +97,9 @@ void * uplink_thread()
 
 int main(int argc, char const *argv[])
 {
-    int sock_sctp, addrlen, bytes_readed, i;
+    int addrlen, bytes_readed, i;
     const char * tunnel_ip, * sctp_server_ip;
     int tunnel_port, sctp_server_port;
-    pthread_t downlink_id, uplink_id;
     struct sctp_event_subscribe events;
     struct sockaddr_in my_addr, remote_addr;
     struct sockaddr_in sctp_server_addr;
@@ -85,12 +117,12 @@ int main(int argc, char const *argv[])
     sctp_server_ip = argv[3];
     sctp_server_port = atoi(argv[4]);
 
-
+    /* Ctrl + c signal handler */
+    signal(SIGINT, sigint_handler);
 
     /*
     * SCTP Server Set Up
     */
-
     sock_sctp = socket(PF_INET, SOCK_STREAM, IPPROTO_SCTP);
     if (sock_sctp < 0)
     {
@@ -166,14 +198,21 @@ int main(int argc, char const *argv[])
     /* TCP Tunnel established */
 
 
-
-
     /* Init both threads to handle downlink and uplink messages */
     pthread_create(&downlink_id, NULL, &downlink_thread, NULL);
     pthread_create(&uplink_id, NULL, &uplink_thread, NULL);
 
+    /* Wait util thread finish */
     pthread_join(downlink_id, NULL);
     pthread_join(uplink_id, NULL);
+
+    printf("\nClosing decriptors...\n");
+    close(sock_sctp);
+    close(sock);
+    close(client);
+
+
+    printf("Done!\n");
 
     return 0;
 }
